@@ -1,0 +1,62 @@
+#include <iostream>
+#include <vector>
+#include <cmath>
+#include <algorithm>
+using namespace std;
+
+const long long INF = 1000000000000;
+
+int main() {
+    ios_base::sync_with_stdio(false);
+    cin.tie(NULL);
+
+    int m;
+    cin >> m;
+
+    vector<int> arr(pow(2, m));
+    int sum = 0;
+    for (int i = 0; i < pow(2, m); i++) {
+        cin >> arr[i];
+        sum += arr[i];
+    }
+
+    if (sum == pow(2, m)) {
+        cout << "1\n1\n";
+        for (int i = 0; i < m; i++) {
+            cout << "0 ";
+        }
+        cout << "0.5";
+    } else if (sum == 0) {
+        cout << "1\n1\n";
+        for (int i = 0; i < m; i++) {
+            cout << "0 ";
+        }
+        cout << "-0.5";
+    } else {
+        cout << "2\n";
+        int cnt = (sum > pow(2, m) / 2) ? pow(2, m) - sum : sum;
+        cout << cnt << " 1\n";
+        for (int i = 0; i < pow(2, m); i++) {
+            if ((sum > pow(2, m) / 2 && arr[i]) || (sum <= pow(2, m) / 2 && !arr[i])) {
+                continue;
+            }
+            vector<bool> barr(m);
+            int k = i;
+            for (int j = m - 1; j >= 0; j--) {
+                barr[j] = k % 2 == 1;
+                k /= 2;
+            }
+            int cnt_true = count(barr.begin(), barr.end(), true);
+            for (int j = 0; j < m; j++) {
+                cout << (barr[j] ? 1 : -INF) << " ";
+            }
+            cout << 0.5 - 1.0 * cnt_true << endl;
+        }
+        for (int i = 0; i < cnt; i++) {
+            cout << ((sum > pow(2, m) / 2) ? -INF : 1.0) << " ";
+        }
+        cout << ((sum > pow(2, m) / 2) ? 1.0 : -0.5);
+    }
+
+    return 0;
+}
