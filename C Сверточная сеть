@@ -1,0 +1,439 @@
+#include <iostream>
+#include <vector>
+#include <cmath>
+#include <algorithm>
+
+using namespace std;
+
+class Temp {
+public:
+    int dep, len;
+    vector<vector<vector<double>>> result, diff;
+
+    Temp(int dep, int len) {
+        this->dep = dep;
+        this->len = len;
+        this->result.resize(dep, vector<vector<double>>(len, vector<double>(len, 0.0)));
+        this->diff.resize(dep, vector<vector<double>>(len, vector<double>(len, 0.0)));
+    }
+
+    virtual void forward() = 0;
+    virtual void backward() = 0;
+    virtual void diffout() = 0;
+};
+
+class Var : public Temp {
+public:
+    Var(int dep, int len) : Temp(dep, len) {}
+
+    void forward() override {}
+    void backward() override {}
+
+    void diffout() override {
+        for (auto &dep: this->diff)
+            for (auto &len: dep)
+                for (auto &val: len)
+                    cout << val << " ";
+        cout << endl;
+    }
+};
+
+class Relu : public Temp {
+public:
+    double alpha;
+    Temp *prev;
+
+    Relu(Temp *prev, int alpha) : Temp(prev->dep, prev->len) {
+        this->alpha = 1.0 / alpha;
+        this->prev = prev;
+    }
+
+    void forward() override {
+        this->result = this->prev->result;
+        for (int dep = 0; dep < this->dep; dep++)
+            for (int i = 0; i < this->len; i++)
+                for (int j = 0; j < this->len; j++)
+                    if (this->result[dep][i][j] < 0) this->result[dep][i][j] *= this->alpha;
+    }
+
+    void backward() override {
+        auto ans = this->diff;
+        for (int dep = 0; dep < this->dep; dep++)
+            for (int i = 0; i < this->len; i++)
+                for (int j = 0; j < this->len; j++)
+                    if (this->result[dep][i][j] < 0) ans[dep][i][j] *= this->alpha;
+        this->prev->diff = ans;
+    }
+
+    void diffout() override {}
+};
+
+class Pool : public Temp {
+public:
+    Temp *prev;
+    int s;
+
+    Pool(Temp *prev, int s) : Temp(prev->dep, ceil(prev->len / s)) {
+        this->prev = prev;
+        this->s = s;
+    }
+
+    void forward() override {
+        for (int dep = 0; dep < this->dep; dep++)
+            for (int i = 0; i < this->len; i++) {
+                int i2 = s * i, i3 = s * (i + 1);
+                for (int j = 0; j < this->len; j++) {
+                    double max1 = -1e9;
+                    int j2 = s * j, j3 = s * (j + 1);
+                    for (int i1 = i2; i1 < i3; i1++)
+                        for (int j1 = j2; j1 < j3; j1++)
+                            max1 = max(max1, this->prev->result[dep][i1][j1]);
+                    this->result[dep][i][j] = max1;
+                }
+            }
+    }
+
+    void backward() override {
+        for (int dep = 0; dep < this->dep; dep++)
+            for (int i = 0; i < this->len; i++) {
+                int i2 = s * i, i3 = s * (i + 1);
+                for (int j = 0; j < this->len; j++) {
+                    int j2 = s * j, j3 = s * (j + 1);
+                    for (int i1 = i2; i1 < i3; i1++)
+                        for (int j1 = j2; j1 < j3; j1++)
+                            if (this->result[dep][i][j] == this->prev->result[dep][i1][j1])
+                                this->prev->diff[dep][i1][j1] = this->diff[dep][i][j];
+                }
+            }
+    }
+
+    void diffout() override {}
+};
+
+class Bias : public Temp {
+public:
+    Temp *prev;
+    vector<double> bias;
+
+    explicit Bias(Temp *prev) : Temp(prev->dep, prev->len) {
+
+        this->prev = prev;
+        for (int dep = 0; dep < prev->dep; dep++) {
+            int b;
+            cin >> b;
+            this->bias.push_back(b);
+        }
+    }
+
+    void forward() override {
+        for (int dep = 0; dep < prev->dep; dep++)
+            for (int i = 0; i < len; i++)
+                for (int j = 0; j < len; j++)
+                    result[dep][i][j] = this->prev->result[dep][i][j] + bias[dep];
+    }
+
+    void backward() override {
+        for (int dep = 0; dep < this->dep; dep++)
+            for (int i = 0; i < len; i++)
+                for (int j = 0; j < len; j++)
+                    this->prev->diff[dep][i][j] += this->diff[dep][i][j];
+    }
+
+    void diffout() override {
+        for (int dep = 0; dep < this->dep; dep++) {
+            double sum = 0.0;
+            for (int i = 0; i < len; i++)
+                for (int j = 0; j < len; j++)
+                    sum += diff[dep][i][j];
+            cout << sum << " ";
+        }
+        cout << endl;
+    }
+};
+
+class Cnvm : public Temp {
+public:
+    Temp *prev;
+    int K, Step, Pad;
+    vector<vector<vector<vector<double>>>> A, diff_A;
+    vector<vector<vector<double>>> pad;
+
+    vector<vector<vector<double>>> cnt_pad() {
+        vector<vector<vector<double>>> ans(pad.size(), vector<vector<double>>(pad[0].size(),
+                                                                              vector<double>(pad[0][0].size(),
+                                                                                             0.0)));
+        for (int depo = 0; depo < dep; depo++)
+            for (int depi = 0; depi < prev->dep; depi++)
+                for (int i = 0; i < len; i++)
+                    for (int j = 0; j < len; j++)
+                        for (int i1 = 0; i1 < K; i1++)
+                            for (int j1 = 0; j1 < K; j1++) {
+                                ans[depi][i * Step + i1][j * Step + j1] += A[depo][depi][i1][j1] * diff[depo][i][j];
+                                diff_A[depo][depi][i1][j1] +=
+                                        pad[depi][i * Step + i1][j * Step + j1] * diff[depo][i][j];
+                            }
+        return transform_diff(ans);
+    }
+
+    Cnvm(Temp *prev, int H, int K, int S, int P)
+            : Temp(H, (prev->len - K + 2 * P) / S + 1),
+              prev(prev), K(K), Step(S), Pad(P) {
+
+        A.resize(dep, vector<vector<vector<double>>>(prev->dep, vector<vector<double>>(K, vector<double>(K, 0.0))));
+        for (int depo = 0; depo < dep; depo++)
+            for (int depi = 0; depi < prev->dep; depi++)
+                for (int i = 0; i < K; i++)
+                    for (int j = 0; j < K; j++)
+                        cin >> A[depo][depi][i][j];
+
+
+        pad.resize(prev->dep, vector<vector<double>>(prev->len + 2 * P, vector<double>(
+                prev->len + 2 * P, 0.0)));
+        for (int dep = 0; dep < prev->dep; dep++)
+            for (int i = 0; i < prev->len; i++)
+                for (int j = 0; j < prev->len; j++)
+                    pad[dep][i + P][j + P] = prev->result[dep][i][j];
+
+        diff_A.resize(
+                A.size(),
+                vector<vector<vector<double>>>(
+                        A[0].size(),
+                        vector<vector<double>>(
+                                A[0][0].size(),
+                                vector<double>(
+                                        A[0][0][0].size(),
+                                        0.0))));
+    }
+
+    void forward() override {
+        make_pad();
+        for (int depo = 0; depo < dep; depo++)
+            for (int depi = 0; depi < prev->dep; depi++)
+                for (int i = 0; i < len; i++)
+                    for (int j = 0; j < len; j++)
+                        for (int i1 = 0; i1 < K; i1++)
+                            for (int j1 = 0; j1 < K; j1++)
+                                result[depo][i][j] +=
+                                        A[depo][depi][i1][j1] * pad[depi][i * Step + i1][j * Step + j1];
+    }
+
+    void backward() override {
+        auto pad_dif = cnt_pad();
+        for (int dep = 0; dep < prev->dep; dep++)
+            for (int i = 0; i < prev->len; i++)
+                for (int j = 0; j < prev->len; j++)
+                    this->prev->diff[dep][i][j] += pad_dif[dep][i + Pad][j + Pad];
+    }
+
+    void diffout() override {
+        for (auto &i1: diff_A)
+            for (auto &i2: i1)
+                for (auto &i3: i2)
+                    for (auto &i: i3)
+                        cout << i << ' ';
+        cout << endl;
+    }
+
+    virtual vector<vector<vector<double>>> transform_diff(vector<vector<vector<double>>> &ans) {
+        int N = prev->len + Pad * 2;
+        for (int dep = 0; dep < prev->dep; dep++) {
+            auto ans_d = &(ans[dep]);
+            for (int j = 0; j < N; j++) {
+                for (int i1 = 0, i2 = N - 1; i1 < Pad; i1++, i2--) {
+                    (*ans_d)[Pad * 2 - i1][j] += (*ans_d)[i1][j];
+                    (*ans_d)[(N - Pad - 1) * 2 - i2][j] += (*ans_d)[i2][j];
+                }
+            }
+            for (int i = Pad; i < N - Pad; i++) {
+                for (int j1 = 0, j2 = N - 1; j1 < Pad; j1++, j2--) {
+                    (*ans_d)[i][Pad * 2 - j1] += (*ans_d)[i][j1];
+                    (*ans_d)[i][(N - Pad - 1) * 2 - j2] += (*ans_d)[i][j2];
+                }
+            }
+        }
+        return ans;
+    }
+
+    virtual void make_pad() {
+        int N = prev->len + Pad * 2;
+        if (prev->len == 1) {
+            for (int dep = 0; dep < prev->dep; dep++) {
+                auto cur = prev->result[dep][0][0];
+                for (int i = 0; i < N; i++) {
+                    for (int j = 0; j < N; j++) {
+                        pad[dep][i][j] = cur;
+                    }
+                }
+            }
+            return;
+        }
+
+        for (int dep = 0; dep < prev->dep; dep++) {
+            auto pad_d = &(pad[dep]);
+            for (int i = Pad; i < N - Pad; i++) {
+                for (int j = 1, j1 = Pad - 1, j2 = N - Pad; j2 < N; j++, j1--, j2++) {
+                    (*pad_d)[i][j1] = (*pad_d)[i][Pad + j];
+                    (*pad_d)[i][j2] = (*pad_d)[i][N - Pad - j - 1];
+                }
+            }
+            for (int j = 0; j < N; j++) {
+                for (int i = 1, i1 = Pad - 1, i2 = N - Pad; i2 < N; i++, i1--, i2++) {
+                    (*pad_d)[i1][j] = (*pad_d)[Pad + i][j];
+                    (*pad_d)[i2][j] = (*pad_d)[N - Pad - i - 1][j];
+                }
+            }
+        }
+    }
+};
+
+class Cnve : public Cnvm {
+
+    vector<vector<vector<double>>> transform_diff(vector<vector<vector<double>>> &ans) override {
+        int N = prev->len + Pad * 2;
+        for (int dep = 0; dep < prev->dep; dep++) {
+            auto ans_d = &(ans[dep]);
+            for (int j = 0; j < N; j++) {
+                for (int i1 = 0, i2 = N - 1; i1 < Pad; i1++, i2--) {
+                    (*ans_d)[Pad][j] += (*ans_d)[i1][j];
+                    (*ans_d)[N - Pad - 1][j] += (*ans_d)[i2][j];
+                }
+            }
+            for (int i = Pad; i < N - Pad; i++) {
+                for (int j1 = 0, j2 = N - 1; j1 < Pad; j1++, j2--) {
+                    (*ans_d)[i][Pad] += (*ans_d)[i][j1];
+                    (*ans_d)[i][N - Pad - 1] += (*ans_d)[i][j2];
+                }
+            }
+        }
+        return ans;
+    }
+
+    void make_pad() override {
+        int N = prev->len + Pad * 2;
+        for (int dep = 0; dep < prev->dep; dep++) {
+            auto pad_d = &(pad[dep]);
+            for (int i = Pad; i < prev->len + Pad; i++) {
+                for (int j1 = Pad - 1, j2 = N - Pad; j2 < N; j1--, j2++) {
+                    (*pad_d)[i][j1] = (*pad_d)[i][Pad];
+                    (*pad_d)[i][j2] = (*pad_d)[i][N - Pad - 1];
+                }
+            }
+            for (int j = 0; j < N; j++) {
+                for (int i1 = Pad - 1, i2 = N - Pad; i2 < N; i1--, i2++) {
+                    (*pad_d)[i1][j] = (*pad_d)[Pad][j];
+                    (*pad_d)[i2][j] = (*pad_d)[N - Pad - 1][j];
+                }
+            }
+        }
+    }
+
+public:
+    Cnve(Temp *prev, int H, int K, int S, int P) : Cnvm(prev, H, K, S, P) {}
+};
+
+class Cnvc : public Cnvm {
+
+    vector<vector<vector<double>>> transform_diff(vector<vector<vector<double>>> &ans) override {
+        int N = prev->len + Pad * 2;
+        for (int dep = 0; dep < prev->dep; dep++) {
+            auto ans_d = &(ans[dep]);
+            for (int j = 0; j < N; j++) {
+                for (int i1 = 0; i1 < Pad; i1++) {
+                    (*ans_d)[+prev->len + i1][j] += (*ans_d)[i1][j];
+                }
+                for (int i2 = N - 1; i2 >= N - Pad; i2--) {
+                    (*ans_d)[-prev->len + i2][j] += (*ans_d)[i2][j];
+                }
+            }
+            for (int i = Pad; i < N - Pad; i++) {
+                for (int j1 = 0; j1 < Pad; j1++) {
+                    (*ans_d)[i][+prev->len + j1] += (*ans_d)[i][j1];
+                }
+                for (int j2 = N - 1; j2 >= N - Pad; j2--) {
+                    (*ans_d)[i][-prev->len + j2] += (*ans_d)[i][j2];
+                }
+            }
+        }
+        return ans;
+    }
+
+    void make_pad() override {
+        int N = prev->len + Pad * 2;
+        for (int dep = 0; dep < prev->dep; dep++) {
+            auto pad_d = &(pad[dep]);
+            for (int i = Pad; i < N - Pad; i++) {
+                for (int j = 0, j1 = Pad - 1, j2 = N - Pad; j2 < N; j++, j1--, j2++) {
+                    (*pad_d)[i][j1] = (*pad_d)[i][N - Pad - j - 1];
+                    (*pad_d)[i][j2] = (*pad_d)[i][Pad + j];
+                }
+            }
+            for (int j = 0; j < N; j++) {
+                for (int i = 0, i1 = Pad - 1, i2 = N - Pad; i2 < N; i++, i1--, i2++) {
+                    (*pad_d)[i1][j] = (*pad_d)[N - Pad - i - 1][j];
+                    (*pad_d)[i2][j] = (*pad_d)[Pad + i][j];
+                }
+            }
+        }
+    }
+
+public:
+    Cnvc(Temp *prev, int H, int K, int S, int P) : Cnvm(prev, H, K, S, P) {}
+};
+
+int main() {
+    int N, D;
+    cin >> N >> D;
+    Temp *varr = new Var(D, N);
+    for (int dep = 0; dep < D; dep++)
+        for (int i = 0; i < N; i++)
+            for (int j = 0; j < N; j++)
+                cin >> varr->result[dep][i][j];
+    Temp *cur = varr;
+    vector<Temp *> out;
+    int L;
+    cin >> L;
+    for (int i = 0; i < L; i++) {
+        string s;
+        cin >> s;
+        if (s == "pool") {
+            int S;
+            cin >> S;
+            cur = new Pool(cur, S);
+        } else if (s == "bias") {
+            cur = new Bias(cur);
+        } else if (s == "relu") {
+            int alpha;
+            cin >> alpha;
+            cur = new Relu(cur, alpha);
+        } else if (s == "cnvm") {
+            int H, K, S, P;
+            cin >> H >> K >> S >> P;
+            cur = new Cnvm(cur, H, K, S, P);
+        } else if (s == "cnve") {
+            int H, K, S, P;
+            cin >> H >> K >> S >> P;
+            cur = new Cnve(cur, H, K, S, P);
+        } else if (s == "cnvc") {
+            int H, K, S, P;
+            cin >> H >> K >> S >> P;
+            cur = new Cnvc(cur, H, K, S, P);
+        }
+        cur->forward();
+        out.push_back(cur);
+    }
+    for (int dep = 0; dep < cur->dep; dep++)
+        for (int i = 0; i < cur->len; i++)
+            for (int j = 0; j < cur->len; j++) {
+                cin >> cur->diff[dep][i][j];
+                cout << cur->result[dep][i][j] << ' ';
+            }
+    cout << endl;
+    for (int i = (int) out.size() - 1; i >= 0; i--) {
+        out[i]->backward();
+    }
+    varr->diffout();
+    for (auto &i: out) {
+        i->diffout();
+    }
+    return 0;
+}
