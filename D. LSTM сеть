@@ -1,0 +1,406 @@
+#include <iostream>
+#include <vector>
+#include <cmath>
+#include <iomanip>
+
+using namespace std;
+
+class Temp {
+public:
+    int row, cnt;
+    vector<vector<double>> result, diff;
+    Temp(int row, int cnt) : row(row), cnt(cnt), result(row, vector<double>(cnt)), diff(row, vector<double>(cnt)) {}
+    virtual void forward() = 0;
+    virtual void backward() = 0;
+};
+
+class Var : public Temp {
+public:
+    Var(int row, int cnt) : Temp(row, cnt) {}
+    void forward() override {}
+    void backward() override {}
+};
+
+class Tnh : public Temp {
+public:
+    Temp* prevv{};
+    explicit Tnh(Temp* prevv) : Temp(prevv->row, prevv->cnt), prevv(prevv) {}
+
+    void forward() override {
+        result = vector<vector<double>>(row, vector<double>(cnt));
+        for (int i = 0; i < row; i++)
+            for (int j = 0; j < cnt; j++)
+                result[i][j] = tanh(prevv->result[i][j]);
+    }
+
+    void backward() override {
+        for (int i = 0; i < row; i++)
+            for (int j = 0; j < cnt; j++)
+                prevv->diff[i][j] += (1 - result[i][j] * result[i][j]) * diff[i][j];
+    }
+};
+
+class Sgm : public Temp {
+public:
+    Temp* prevv{};
+    explicit Sgm(Temp* prevv) : Temp(prevv->row, prevv->cnt), prevv(prevv) {}
+
+    void forward() override {
+        result = vector<vector<double>>(row, vector<double>(cnt));
+        for (int i = 0; i < row; i++)
+            for (int j = 0; j < cnt; j++)
+                result[i][j] = 1 / (1 + exp(-prevv->result[i][j]));
+    }
+
+    void backward() override {
+        for (int i = 0; i < row; i++)
+            for (int j = 0; j < cnt; j++)
+                prevv->diff[i][j] += (1 - result[i][j]) * result[i][j] * diff[i][j];
+    }
+};
+
+
+class Mul : public Temp {
+public:
+    Temp *l, *r;
+    Mul(Temp* l, Temp* r) : Temp(l->row, r->cnt), l(l), r(r) {}
+
+    static vector<vector<double>> transposeMatrix(vector<vector<double>>& matrix) {
+        int rows = matrix.size();
+        int cols = matrix[0].size();
+        vector<vector<double>> transposedMatrix(cols, vector<double>(rows));
+        for (int i = 0; i < rows; i++)
+            for (int j = 0; j < cols; j++)
+                transposedMatrix[j][i] = matrix[i][j];
+        return transposedMatrix;
+    }
+
+    void forward() override {
+        result = vector<vector<double>>(row, vector<double>(cnt));
+        for (int i = 0; i < row; i++)
+            for (int j = 0; j < cnt; j++)
+                for (int z = 0; z < l->cnt; z++)
+                    result[i][j] += l->result[i][z] * r->result[z][j];
+    }
+
+    void backward() override {
+        auto aT = transposeMatrix(l->result);
+        auto bT = transposeMatrix(r->result);
+        for (int k = 0; k < l->cnt; k++)
+            for (int j = 0; j < cnt; j++)
+                for (int i = 0; i < row; i++) {
+                    l->diff[i][k] += diff[i][j] * bT[j][k];
+                    r->diff[k][j] += aT[k][i] * diff[i][j];
+                }
+
+
+    }
+};
+
+class Sum : public Temp {
+public:
+    vector<Temp*> as;
+    explicit Sum(vector<Temp*> as) : Temp(as[0]->row, as[0]->cnt), as(as) {}
+
+    void forward() override {
+        result = vector<vector<double>>(row, vector<double>(cnt));
+        for (auto a: as)
+            for (int i = 0; i < row; i++)
+                for (int j = 0; j < cnt; j++)
+                    result[i][j] += a->result[i][j];
+    }
+
+    void backward() override {
+        for (auto a: as)
+            for (int i = 0; i < row; i++)
+                for (int j = 0; j < cnt; j++)
+                    a->diff[i][j] += diff[i][j];
+    }
+};
+
+class Had : public Temp {
+public:
+    vector<Temp*> as;
+    explicit Had(vector<Temp*> as) : Temp(as[0]->row, as[0]->cnt), as(as) {}
+
+    void forward() override {
+        result = as[0]->result;
+        for (int i = 0; i < row; i++) {
+            for (int j = 0; j < cnt; j++) {
+                for (int k = 1; k < as.size(); k++) {
+                    result[i][j] *= as[k]->result[i][j];
+                }
+            }
+        }
+    }
+
+    void backward() override {
+        for (int k = 0; k < as.size(); k++) {
+            vector<vector<double>> ans(row, vector<double>(cnt, 1.0));
+            for (int i = 0; i < row; i++) {
+                for (int j = 0; j < cnt; j++) {
+                    for (int l = 0; l < as.size(); l++) {
+                        if (l == k) continue;
+                        ans[i][j] *= as[l]->result[i][j];
+                    }
+                    ans[i][j] *= diff[i][j];
+                    as[k]->diff[i][j] += ans[i][j];
+                }
+            }
+        }
+    }
+};
+
+int main() {
+    int n;
+    cin >> n;
+
+    cout << setprecision(10);
+
+    Var* Wf = new Var(n, n);
+    Var* Uf = new Var(n, n);
+    Var* bf = new Var(n, 1);
+    Var* Wi = new Var(n, n);
+    Var* Ui = new Var(n, n);
+    Var* bi = new Var(n, 1);
+    Var* Wo = new Var(n, n);
+    Var* Uo = new Var(n, n);
+    Var* bo = new Var(n, 1);
+    Var* Wc = new Var(n, n);
+    Var* Uc = new Var(n, n);
+    Var* bc = new Var(n, 1);
+
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            cin >> Wf->result[i][j];
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            cin >> Uf->result[i][j];
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        cin >> bf->result[i][0];
+    }
+
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            cin >> Wi->result[i][j];
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            cin >> Ui->result[i][j];
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        cin >> bi->result[i][0];
+    }
+
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            cin >> Wo->result[i][j];
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            cin >> Uo->result[i][j];
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        cin >> bo->result[i][0];
+    }
+
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            cin >> Wc->result[i][j];
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            cin >> Uc->result[i][j];
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        cin >> bc->result[i][0];
+    }
+
+    int m;
+    cin >> m;
+
+    Var* h0 = new Var(n, 1);
+    Var* c0 = new Var(n, 1);
+    for (int i = 0; i < n; i++) {
+        cin >> h0->result[i][0];
+    }
+    for (int i = 0; i < n; i++) {
+        cin >> c0->result[i][0];
+    }
+
+    Temp* ht0 = h0;
+    Temp* ct0 = c0;
+    vector<vector<Temp*>> netBlocks(m);
+    int ot_id = 11;
+    vector<Var*> xts;
+    for (auto & block : netBlocks) {
+        Var* xt = new Var(n, 1);
+        for (int i = 0; i < n; i++) {
+            cin >> xt->result[i][0];
+        }
+        xts.push_back(xt);
+
+        auto mul_wf_xt = new Mul(Wf, xt);
+        auto mul_uf_ht0 = new Mul(Uf, ht0);
+        auto sum_f3 = new Sum({mul_wf_xt, mul_uf_ht0, bf});
+        auto ft = new Sgm(sum_f3);
+
+        auto mul_wi_xt = new Mul(Wi, xt);
+        auto mul_ui_ht0 = new Mul(Ui, ht0);
+        auto sum_i3 = new Sum({mul_wi_xt, mul_ui_ht0, bi});
+        auto it = new Sgm(sum_i3);
+
+        auto mul_wo_xt = new Mul(Wo, xt);
+        auto mul_uo_ht0 = new Mul(Uo, ht0);
+        auto sum_o3 = new Sum({mul_wo_xt, mul_uo_ht0, bo});
+        auto ot = new Sgm(sum_o3);
+
+        auto mul_wc_xt = new Mul(Wc, xt);
+        auto mul_uc_ht0 = new Mul(Uc, ht0);
+        auto sum_c3 = new Sum({mul_wc_xt, mul_uc_ht0, bc});
+        auto tnh_c = new Tnh(sum_c3);
+        auto had_it_tnhc = new Had({it, tnh_c});
+        auto had_ft_ct0 = new Had({ft, ct0});
+        auto ct = new Sum({had_it_tnhc, had_ft_ct0});
+
+        auto ht = new Had({ot, ct});
+
+        block = {mul_wf_xt, mul_uf_ht0, sum_f3, ft,
+                 mul_wi_xt, mul_ui_ht0, sum_i3, it,
+                 mul_wo_xt, mul_uo_ht0, sum_o3, ot,
+                 mul_wc_xt, mul_uc_ht0, sum_c3, tnh_c, had_it_tnhc, had_ft_ct0, ct,
+                 ht
+        };
+        for (auto el : block) {
+            el->forward();
+        }
+        for (int i = 0; i < n; i++) {
+            cout << ot->result[i][0] << ' ';
+        }
+        cout << endl;
+        ht0 = ht;
+        ct0 = ct;
+    }
+
+    for (int i = 0; i < n; i++) {
+        cout << ht0->result[i][0] << ' ';
+    }
+    cout << endl;
+    for (int i = 0; i < n; i++) {
+        cout << ct0->result[i][0] << ' ';
+    }
+    cout << endl;
+
+    for (int i = 0; i < n; i++) {
+        cin >> ht0->diff[i][0];
+    }
+    for (int i = 0; i < n; i++) {
+        cin >> ct0->diff[i][0];
+    }
+
+    for (int block_i = m - 1; block_i >= 0; block_i--) {
+        auto & block = netBlocks[block_i];
+        auto ot = block[ot_id];
+        auto xt = xts[block_i];
+        for (int i = 0; i < n; i++) {
+            cin >> ot->diff[i][0];
+        }
+        for (int el_i = (int) block.size() - 1; el_i >= 0; el_i--) {
+            auto & el = block[el_i];
+            el->backward();
+        }
+        for (int i = 0; i < n; i++) {
+            cout << xt->diff[i][0] << ' ';
+        }
+        cout << endl;
+    }
+
+    for (int i = 0; i < n; i++) {
+        cout << h0->diff[i][0] << ' ';
+    }
+    cout << endl;
+    for (int i = 0; i < n; i++) {
+        cout << c0->diff[i][0] << ' ';
+    }
+    cout << endl;
+
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            cout << Wf->diff[i][j] << ' ';
+        }
+        cout << endl;
+    }
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            cout << Uf->diff[i][j] << ' ';
+        }
+        cout << endl;
+    }
+    for (int i = 0; i < n; i++) {
+        cout << bf->diff[i][0] << ' ';
+    }
+    cout << endl;
+
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            cout << Wi->diff[i][j] << ' ';
+        }
+        cout << endl;
+    }
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            cout << Ui->diff[i][j] << ' ';
+        }
+        cout << endl;
+    }
+    for (int i = 0; i < n; i++) {
+        cout << bi->diff[i][0] << ' ';
+    }
+    cout << endl;
+
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            cout << Wo->diff[i][j] << ' ';
+        }
+        cout << endl;
+    }
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            cout << Uo->diff[i][j] << ' ';
+        }
+        cout << endl;
+    }
+    for (int i = 0; i < n; i++) {
+        cout << bo->diff[i][0] << ' ';
+    }
+    cout << endl;
+
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            cout << Wc->diff[i][j] << ' ';
+        }
+        cout << endl;
+    }
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            cout << Uc->diff[i][j] << ' ';
+        }
+        cout << endl;
+    }
+    for (int i = 0; i < n; i++) {
+        cout << bc->diff[i][0] << ' ';
+    }
+    cout << endl;
+
+    return 0;
+}
