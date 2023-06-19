@@ -1,0 +1,28 @@
+const readline = require('readline');
+const put = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+});
+
+let n, k, m1 = new Map(), m2 = new Map(), m12 = new Map();
+
+put.on('line', (line) => {
+    if (!k) k = parseInt(line);
+    else if (!n) n = parseInt(line);
+    else {
+        const [a, b] = line.split(' ').map(Number);
+        m1.set(a, (m1.get(a) || 0) + 1);
+        m2.set(a, (m2.get(a) || 0) + b);
+        m12.set(a, (m12.get(a) || 0) + b * b);
+    }
+});
+
+put.on('close', () => {
+    let ans = 0;
+    for (let [i, chi] of m1) {
+        const m = m2.get(i) / chi;
+        const vr = m12.get(i) / chi - m * m;
+        ans += chi / n * vr;
+    }
+    console.log(ans.toFixed(6));
+});
