@@ -1,0 +1,225 @@
+#include <iostream>
+#include <vector>
+#include <cmath>
+
+using namespace std;
+
+class Temp {
+public:
+    int row, count;
+    vector<vector<double>> result, diff;
+    Temp(int row, int count) : row(row), count(count), result(row, vector<double>(count)), diff(row, vector<double>(count)) {}
+    virtual void forward() = 0;
+    virtual void backward() = 0;
+};
+
+class Var : public Temp {
+public:
+    Var(int row, int count) : Temp(row, count) {}
+    void forward() override {}
+    void backward() override {}
+};
+
+class Tnh : public Temp {
+public:
+    Temp* a;
+    explicit Tnh(Temp* a);
+
+    void forward() override {
+        result = vector<vector<double>>(row, vector<double>(count));
+        for (int i = 0; i < row; i++)
+            for (int j = 0; j < count; j++)
+                result[i][j] = tanh(a->result[i][j]);
+    }
+
+    void backward() override {
+        for (int i = 0; i < row; i++)
+            for (int j = 0; j < count; j++)
+                a->diff[i][j] += (1 - result[i][j] * result[i][j]) * diff[i][j];
+    }
+};
+
+Tnh::Tnh(Temp *a) : Temp(a->row, a->count), a(a) {}
+
+class Rlu : public Temp {
+public:
+    double alpha;
+    Temp* a;
+    Rlu(int alpha, Temp* a) : Temp(a->row, a->count), alpha(1.0 / alpha), a(a) {}
+
+    void forward() override {
+        result = a->result;
+        for (int i = 0; i < row; i++)
+            for (int j = 0; j < count; j++)
+                if (result[i][j] < 0) result[i][j] *= alpha;
+    }
+
+    void backward() override {
+        for (int i = 0; i < row; i++)
+            for (int j = 0; j < count; j++)
+                a->diff[i][j] += result[i][j] < 0 ? alpha * diff[i][j] : diff[i][j];
+    }
+};
+
+class Mul : public Temp {
+public:
+    Temp *a, *b;
+    Mul(Temp* a, Temp* b) : Temp(a->row, b->count), a(a), b(b) {}
+
+    static vector<vector<double>> transposeMatrix(vector<vector<double>>& matrix) {
+        int rows = matrix.size();
+        int cols = matrix[0].size();
+        vector<vector<double>> transposedMatrix(cols, vector<double>(rows));
+        for (int i = 0; i < rows; i++)
+            for (int j = 0; j < cols; j++)
+                transposedMatrix[j][i] = matrix[i][j];
+        return transposedMatrix;
+    }
+
+    void forward() override {
+        result = vector<vector<double>>(row, vector<double>(count));
+        for (int i = 0; i < row; i++)
+            for (int j = 0; j < count; j++)
+                for (int z = 0; z < a->count; z++)
+                    result[i][j] += a->result[i][z] * b->result[z][j];
+    }
+
+    void backward() override {
+        auto aT = transposeMatrix(a->result);
+        auto bT = transposeMatrix(b->result);
+        for (int k = 0; k < a->count; k++)
+            for (int j = 0; j < count; j++)
+                for (int i = 0; i < row; i++) {
+                    a->diff[i][k] += diff[i][j] * bT[j][k];
+                    b->diff[k][j] += aT[k][i] * diff[i][j];
+                }
+
+
+    }
+};
+
+class Sum : public Temp {
+public:
+    vector<Temp*> args;
+    explicit Sum(vector<Temp*> args) : Temp(args[0]->row, args[0]->count), args(args) {}
+
+    void forward() override {
+        result = vector<vector<double>>(row, vector<double>(count));
+        for (auto arg: args)
+            for (int i = 0; i < row; i++)
+                for (int j = 0; j < count; j++)
+                    result[i][j] += arg->result[i][j];
+    }
+
+    void backward() override {
+        for (auto arg: args)
+            for (int i = 0; i < row; i++)
+                for (int j = 0; j < count; j++)
+                    arg->diff[i][j] += diff[i][j];
+    }
+};
+
+class Had : public Temp {
+public:
+    vector<Temp*> args;
+    explicit Had(vector<Temp*> args) : Temp(args[0]->row, args[0]->count), args(args) {}
+
+    void forward() override {
+        result = args[0]->result;
+        for (int i = 0; i < row; i++) {
+            for (int j = 0; j < count; j++) {
+                for (int k = 1; k < args.size(); k++) {
+                    result[i][j] *= args[k]->result[i][j];
+                }
+            }
+        }
+    }
+
+    void backward() override {
+        for (int k = 0; k < args.size(); k++) {
+            vector<vector<double>> res(row, vector<double>(count, 1.0));
+            for (int i = 0; i < row; i++) {
+                for (int j = 0; j < count; j++) {
+                    for (int l = 0; l < args.size(); l++) {
+                        if (l == k) continue;
+                        res[i][j] *= args[l]->result[i][j];
+                    }
+                    res[i][j] *= diff[i][j];
+                    args[k]->diff[i][j] += res[i][j];
+                }
+            }
+        }
+    }
+};
+
+int main() {
+    int n, m, k;
+    cin >> n >> m >> k;
+    vector<Temp*> l;
+    for (int i = 0; i < n; i++) {
+        string s;
+        cin >> s;
+        if (s == "var") {
+            int row, count;
+            cin >> row >> count;
+            l.push_back(new Var(row, count));
+        } else if (s == "tnh") {
+            int a;
+            cin >> a;
+            l.push_back(new Tnh(l[a-1]));
+        } else if (s == "rlu") {
+            int alpha, a;
+            cin >> alpha >> a;
+            l.push_back(new Rlu(alpha, l[a-1]));
+        } else if (s == "mul") {
+            int a, b;
+            cin >> a >> b;
+            l.push_back(new Mul(l[a-1], l[b-1]));
+        } else if (s == "sum") {
+            int k1;
+            cin >> k1;
+            vector<Temp*> args;
+            for (int j = 0; j < k1; j++) {
+                int a;
+                cin >> a;
+                args.push_back(l[a-1]);
+            }
+            l.push_back(new Sum(args));
+        } else if (s == "had") {
+            int k1;
+            cin >> k1;
+            vector<Temp*> args;
+            for (int j = 0; j < k1; j++) {
+                int a;
+                cin >> a;
+                args.push_back(l[a-1]);
+            }
+            l.push_back(new Had(args));
+        }
+    }
+    for (int id = 0; id < m; id++)
+        for (int i = 0; i < l[id]->row; i++)
+            for (int j = 0; j < l[id]->count; j++)
+                cin >> l[id]->result[i][j];
+    for (int i = m; i < n; i++)
+        l[i]->forward();
+    for (int id = n - k; id < n; id++)
+        for (int i = 0; i < l[id]->row; i++) {
+            for (int j = 0; j < l[id]->count; j++) {
+                double val;
+                cin >> val;
+                l[id]->diff[i][j] = val;
+                cout << l[id]->result[i][j] << ' ';
+            }
+            cout << endl;
+        }
+    for (int i = n - 1; i >= m; i--)
+        l[i]->backward();
+    for (int id = 0; id < m; id++)
+        for (int i = 0; i < l[id]->row; i++) {
+            for (int j = 0; j < l[id]->count; j++)
+                cout << l[id]->diff[i][j] << " ";
+            cout << endl;
+        }
+    return 0;
+}
