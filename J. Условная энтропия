@@ -1,0 +1,27 @@
+const readline = require('readline');
+const put = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+});
+
+let k1, k2, n, m1 = new Map(), m2 = new Map();
+
+put.on('line', (line) => {
+    if (!k1) [k1, k2] = line.split(' ').map(Number);
+    else if (!n) n = Number(line);
+    else {
+        const [a, b] = line.split(' ').map(Number);
+        m1.set(a, (m1.get(a) || 0) + 1 / n);
+        m2.set(`${a},${b}`, (m2.get(`${a},${b}`) || 0) + 1 / n);
+    }
+});
+
+(async () => {
+    await new Promise(resolve => put.on('close', resolve));
+    let sum = 0;
+    m2.forEach((v, key) => {
+        const [a] = key.split(',').map(Number);
+        sum += v * Math.log(v / m1.get(a));
+    });
+    console.log(-sum);
+})();
